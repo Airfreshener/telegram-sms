@@ -3,7 +3,6 @@ package com.airfreshener.telegram_sms.mainScreen
 import android.content.Context
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
-import android.os.PowerManager
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -35,11 +34,12 @@ class MainViewModel(
     private val stringsProvider: StringsProvider,
     private val appContext: Context,
     private val prefsRepository: PrefsRepository,
+    private val settingsViewModelDelegate: SettingsViewModelDelegate,
     private val logRepository: LogRepository,
-) : ViewModel() {
+) : ViewModel(), SettingsViewModelDelegate by settingsViewModelDelegate {
 
     private val _settings: MutableStateFlow<Settings> = MutableStateFlow(prefsRepository.getSettings())
-    val settings: StateFlow<Settings> = _settings.asStateFlow()
+    val settings: StateFlow<Settings> = settingsViewModelDelegate.settingsFlow
 
     private val _loading: MutableStateFlow<Boolean> = MutableStateFlow(false)
     val isLoading: Flow<Boolean> = _loading.asStateFlow()
@@ -67,57 +67,6 @@ class MainViewModel(
 
     fun dnsOverHttpChecked(checked: Boolean) {
         _settings.value = _settings.value.copy(isDnsOverHttp = checked)
-    }
-
-    fun fallbackSmsChanged(checked: Boolean) {
-        _settings.value = _settings.value.copy(isFallbackSms = checked)
-    }
-
-    fun chargerStatusChanged(checked: Boolean) {
-        _settings.value = _settings.value.copy(isChargerStatus = checked)
-    }
-
-    fun chatCommandChanged(checked: Boolean) {
-        _settings.value = _settings.value.copy(
-            isChatCommand = checked,
-            isPrivacyMode = _settings.value.chatId.isNotEmpty() && checked && _settings.value.isPrivacyMode,
-        )
-    }
-
-    fun displayDualSimChanged(checked: Boolean) {
-        _settings.value = _settings.value.copy(isDisplayDualSim = checked)
-    }
-
-    fun verificationCodeChecked(checked: Boolean) {
-        _settings.value = _settings.value.copy(isVerificationCode = checked)
-    }
-
-    fun privacyModeChanged(checked: Boolean) {
-        _settings.value = _settings.value.copy(isPrivacyMode = checked)
-    }
-
-    fun trustedPhoneNumberChanged(value: String) {
-        if (value == _settings.value.trustedPhoneNumber) return
-
-        _settings.value = _settings.value.copy(
-            trustedPhoneNumber = value,
-            isFallbackSms = value.isNotEmpty() && _settings.value.isFallbackSms,
-        )
-    }
-
-    fun chatIdChanged(value: String) {
-        if (value == _settings.value.chatId) return
-        _settings.value = _settings.value.copy(
-            chatId = value,
-            isPrivacyMode = value.isNotEmpty() && _settings.value.isChatCommand && _settings.value.isPrivacyMode,
-        )
-    }
-
-    fun botTokenChanged(value: String) {
-        if (value == _settings.value.botToken) return
-        _settings.value = _settings.value.copy(
-            botToken = value,
-        )
     }
 
     fun qrCodeScanned(jsonConfig: JsonObject) {

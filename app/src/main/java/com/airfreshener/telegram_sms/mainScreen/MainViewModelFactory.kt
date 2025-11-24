@@ -17,6 +17,7 @@ class MainViewModelFactory(
             appContext = appContext,
             prefsRepository = app.prefsRepository,
             logRepository = app.logRepository,
+            settingsViewModelDelegate = SettingsViewModelDelegateImpl(app.prefsRepository)
         ) as T
     }
 }
