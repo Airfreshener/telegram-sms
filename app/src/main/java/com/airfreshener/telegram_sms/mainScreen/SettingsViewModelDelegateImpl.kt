@@ -14,6 +14,10 @@ class SettingsViewModelDelegateImpl(
 
     override val settingsFlow: StateFlow<Settings> = settings.asStateFlow()
 
+    override fun updateSettings(newSettings: Settings) {
+        settings.value = newSettings
+    }
+
     override fun fallbackSmsChanged(checked: Boolean) {
         settings.value = settings.value.copy(isFallbackSms = checked)
     }

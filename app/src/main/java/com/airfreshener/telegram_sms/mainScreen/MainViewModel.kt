@@ -10,6 +10,7 @@ import com.airfreshener.telegram_sms.common.data.LogRepository
 import com.airfreshener.telegram_sms.common.data.PrefsRepository
 import com.airfreshener.telegram_sms.common.data.StringsProvider
 import com.airfreshener.telegram_sms.migration.UpdateVersion1
+import com.airfreshener.telegram_sms.model.GetUpdatesDTO
 import com.airfreshener.telegram_sms.model.PollingJson
 import com.airfreshener.telegram_sms.model.RequestMessage
 import com.airfreshener.telegram_sms.model.Settings
@@ -25,7 +26,6 @@ import com.airfreshener.telegram_sms.utils.ServiceUtils
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,6 +34,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import okhttp3.Request
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import java.util.concurrent.TimeUnit
 
 class MainViewModel(
@@ -45,7 +47,6 @@ class MainViewModel(
     private val logger: Logger,
 ) : ViewModel(), SettingsViewModelDelegate by settingsViewModelDelegate {
 
-    private val _settings: MutableStateFlow<Settings> = MutableStateFlow(prefsRepository.getSettings())
     val settings: StateFlow<Settings> = settingsViewModelDelegate.settingsFlow
 
     private val _loading: MutableStateFlow<Boolean> = MutableStateFlow(false)
@@ -67,14 +68,15 @@ class MainViewModel(
     }
 
     fun batteryMonitoringChecked(checked: Boolean) {
-        _settings.value = _settings.value.copy(
+        val newSettings = settings.value.copy(
             isBatteryMonitoring = checked,
-            isChargerStatus = checked && _settings.value.isChargerStatus
+            isChargerStatus = checked && settings.value.isChargerStatus
         )
+        settingsViewModelDelegate.updateSettings(newSettings)
     }
 
     fun dnsOverHttpChecked(checked: Boolean) {
-        _settings.value = _settings.value.copy(isDnsOverHttp = checked)
+        settingsViewModelDelegate.updateSettings(settings.value.copy(isDnsOverHttp = checked))
     }
 
     fun qrCodeScanned(jsonConfig: JsonObject) {
@@ -94,7 +96,7 @@ class MainViewModel(
             isDnsOverHttp = true, // TODO
             isDisplayDualSim = false // TODO
         )
-        _settings.value = newSettings
+        settingsViewModelDelegate.updateSettings(newSettings)
     }
 
     fun onStopClicked() {
@@ -110,10 +112,10 @@ class MainViewModel(
     }
 
     fun onSaveClicked() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val appContext = appContext
             val botTokenSaved = prefsRepository.getSettings().botToken
-            val newSettings = _settings.value
+            val newSettings = settings.value
             if (newSettings.botToken.isEmpty() || newSettings.chatId.isEmpty()) {
                 showSnackBar(R.string.chat_id_or_token_not_config)
                 return@launch
@@ -138,6 +140,11 @@ class MainViewModel(
             val call = okhttpClient.newCall(request)
             val errorHead = "Send message failed: "
             val result = runCatching { call.execute() }
+            val responseBodyStr = result.getOrNull()?.body?.string()
+            val responseJson = runCatching {
+                JsonParser.parseString(responseBodyStr).asJsonObject
+            }.getOrNull()
+
             _loading.value = false
             if (result.isSuccess && result.getOrNull()?.code == 200) {
                 if (newSettings.botToken != botTokenSaved) {
@@ -152,20 +159,20 @@ class MainViewModel(
 
                 prefsRepository.setSettings(newSettings)
 
-                Thread {
+                viewModelScope.launch(Dispatchers.Default) {
                     ServiceUtils.stopAllServices(appContext)
                     try {
-                        Thread.sleep(1000)
+                        delay(1000)
                     } catch (e: InterruptedException) {
                         e.printStackTrace()
                     }
                     ServiceUtils.startServices(appContext, newSettings)
-                }.start()
+                }
                 showSnackBar(R.string.success)
             } else {
-                val resultObj = JsonParser.parseString(result.getOrNull()?.body?.string()).asJsonObject
-                val errorMessage = errorHead + (resultObj?.get("description") ?: result.exceptionOrNull()?.message)
-                logger.e(TAG, errorMessage, result.exceptionOrNull())
+                val exception = result.exceptionOrNull()
+                val errorMessage = errorHead + (responseJson?.get("description") ?: exception?.message)
+                logger.e(TAG, errorMessage, exception)
                 showSnackBar(errorMessage)
             }
         }
@@ -187,8 +194,8 @@ class MainViewModel(
                 .newBuilder()
                 .readTimeout(60, TimeUnit.SECONDS)
                 .build()
-            val requestBody = PollingJson()
-            requestBody.timeout = 60
+            val requestBody = GetUpdatesDTO()
+            requestBody.timeout = 10
             val body = requestBody.toRequestBody()
             val request: Request =
                 Request.Builder()
@@ -214,16 +221,16 @@ class MainViewModel(
                 val chatsList = parseChats(chatsJsonArray)
                 showSelectChatList.emit(chatsList)
             } else {
-                val errorMessage = errorHead + (responseJson?.get("description")?.asString
-                    ?: result.getOrNull()?.message)
-                logger.e(TAG, errorMessage, result.exceptionOrNull())
+                val exception = result.exceptionOrNull()
+                val errorMessage = errorHead + (responseJson?.get("description") ?: exception?.message)
+                logger.e(TAG, errorMessage, exception)
                 showSnackBar(errorMessage)
             }
         }
     }
 
     fun onChatSelected(chat: TelegramChat) {
-        _settings.value = _settings.value.copy(chatId = chat.id)
+        settingsViewModelDelegate.updateSettings(settings.value.copy(chatId = chat.id))
     }
 
     private fun parseChats(chatsJsonArray: JsonArray): List<TelegramChat> {

@@ -45,6 +45,7 @@
 
 
         <service android:name=".services.ResendService"
+            android:foregroundServiceType="shortService"
             android:exported="false"/>
 
         <activity
@@ -54,6 +55,7 @@
 
         <service
             android:name=".services.NotificationListenerService"
+            android:foregroundServiceType="shortService"
             android:label="@string/app_name"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
             android:exported="true">
@@ -61,12 +63,15 @@
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
+
         <service
             android:name=".services.chat.ChatCommandService"
+            android:foregroundServiceType="shortService"
             android:enabled="true"
             android:exported="false"
             android:permission="android.permission.INTERNET"
             android:process=":command" />
+
         <service
             android:name=".services.BatteryService"
             android:foregroundServiceType="shortService"
@@ -132,10 +137,13 @@
             android:name=".qrCodeScreen.QrCodeShowActivity"
             android:label="@string/transfer_configuration"
             android:exported="false" />
+
         <activity android:name=".logScreen.LogcatActivity"
             android:exported="false" />
+
         <activity android:name=".scannerScreen.ScannerActivity"
             android:exported="false"/>
+
         <activity
             android:name=".mainScreen.MainActivity"
             android:windowSoftInputMode="adjustPan"
@@ -159,6 +167,7 @@
                 <data android:scheme="mmsto" />
             </intent-filter>
         </activity>
+
     </application>
 
 </manifest>

@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.StateFlow
 
 interface SettingsViewModelDelegate {
     val settingsFlow: StateFlow<Settings>
+
+    fun updateSettings(newSettings: Settings)
     fun fallbackSmsChanged(checked: Boolean)
     fun chargerStatusChanged(checked: Boolean)
     fun chatCommandChanged(checked: Boolean)
