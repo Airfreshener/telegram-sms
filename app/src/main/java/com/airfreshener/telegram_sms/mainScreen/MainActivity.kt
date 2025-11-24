@@ -152,8 +152,8 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     private fun showSelectChatList(chatsList: List<TelegramChat>) {
         AlertDialog.Builder(binding.root.context)
             .setTitle(R.string.select_chat)
-            .setItems(chatsList.map { it.title }.toTypedArray()) { _: DialogInterface?, i: Int ->
-                binding.chatIdEditview.setText(chatsList[i].id)
+            .setItems(chatsList.map { it.title }.toTypedArray()) { _, i: Int ->
+                viewModel.onChatSelected(chatsList[i])
             }
             .setPositiveButton(applicationContext.getString(R.string.cancel_button), null)
             .show()

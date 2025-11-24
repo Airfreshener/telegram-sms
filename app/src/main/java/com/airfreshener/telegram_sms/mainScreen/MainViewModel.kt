@@ -25,6 +25,7 @@ import com.airfreshener.telegram_sms.utils.ServiceUtils
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,6 +33,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import okhttp3.Request
+import kotlinx.coroutines.Dispatchers
 import java.util.concurrent.TimeUnit
 
 class MainViewModel(
@@ -124,15 +126,7 @@ class MainViewModel(
                 showPrivacyDialog.emit(Unit)
                 return@launch
             }
-
-            // val progressDialog = ProgressDialog(this)
-            // progressDialog.setProgressStyle(ProgressDialog.STYLE_SPINNER)
-            // progressDialog.setTitle(appContext.getString(R.string.connect_wait_title))
-            // progressDialog.setMessage(appContext.getString(R.string.connect_wait_message))
-            // progressDialog.isIndeterminate = false
-            // progressDialog.setCancelable(false)
-            // progressDialog.show()
-
+            _loading.value = true
             val requestUri = NetworkUtils.getUrl(newSettings.botToken, "sendMessage")
             val requestBody = RequestMessage().apply {
                 chat_id = newSettings.chatId
@@ -144,7 +138,7 @@ class MainViewModel(
             val call = okhttpClient.newCall(request)
             val errorHead = "Send message failed: "
             val result = runCatching { call.execute() }
-            // progressDialog.cancel()
+            _loading.value = false
             if (result.isSuccess && result.getOrNull()?.code == 200) {
                 if (newSettings.botToken != botTokenSaved) {
                     logger.i(
@@ -178,8 +172,7 @@ class MainViewModel(
     }
 
     fun onGetIdClicked() {
-        val appContext = appContext
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val settings = settings.value
             if (settings.botToken.isEmpty()) {
                 showSnackBar(R.string.token_not_configure)
@@ -197,13 +190,21 @@ class MainViewModel(
             val requestBody = PollingJson()
             requestBody.timeout = 60
             val body = requestBody.toRequestBody()
-            val request: Request = Request.Builder().url(requestUri).method("POST", body).build()
+            val request: Request =
+                Request.Builder()
+                    .url(requestUri)
+                    .method("POST", body)
+                    .build()
             val call = okhttpClient.newCall(request)
             val errorHead = "Get chat ID failed: "
+            logger.d(TAG, "body: " + requestBody)
             val result = runCatching { call.execute() }
             _loading.value = false
             val responseBodyStr = result.getOrNull()?.body?.string()
-            val responseJson = runCatching { JsonParser.parseString(responseBodyStr).asJsonObject }.getOrNull()
+            logger.d(TAG, "response: " + responseBodyStr)
+            val responseJson = runCatching {
+                JsonParser.parseString(responseBodyStr).asJsonObject
+            }.getOrNull()
             if (result.isSuccess && result.getOrNull()?.code == 200) {
                 val chatsJsonArray = responseJson?.getAsJsonArray("result")
                 if (chatsJsonArray == null || chatsJsonArray.size() == 0) {
@@ -213,12 +214,16 @@ class MainViewModel(
                 val chatsList = parseChats(chatsJsonArray)
                 showSelectChatList.emit(chatsList)
             } else {
-                val errorMessage = errorHead + (responseJson?.get("description")?.asString ?: result.getOrNull()?.message)
+                val errorMessage = errorHead + (responseJson?.get("description")?.asString
+                    ?: result.getOrNull()?.message)
                 logger.e(TAG, errorMessage, result.exceptionOrNull())
                 showSnackBar(errorMessage)
             }
         }
+    }
 
+    fun onChatSelected(chat: TelegramChat) {
+        _settings.value = _settings.value.copy(chatId = chat.id)
     }
 
     private fun parseChats(chatsJsonArray: JsonArray): List<TelegramChat> {
@@ -237,7 +242,7 @@ class MainViewModel(
                         chatObj["first_name"]?.asString?.let { username = it }
                         chatObj["last_name"]?.asString?.let { username += " $it" }
                     }
-                    val title = username + "(" + chatObj["type"].asString + ")"
+                    val title = username + " (" + chatObj["type"].asString + ")"
                     val id = chatObj["id"].asString
                     chatsList += TelegramChat(id = id, title = title)
                     chatIdsSet += id
@@ -247,7 +252,7 @@ class MainViewModel(
                 val messageObj = itemObj["channel_post"].asJsonObject
                 val chatObj = messageObj["chat"].asJsonObject
                 if (!chatIdsSet.contains(chatObj["id"].asString)) {
-                    val title = chatObj["title"].asString + "(Channel)"
+                    val title = chatObj["title"].asString + " (Channel)"
                     val id = chatObj["id"].asString
                     chatsList += TelegramChat(id = id, title = title)
                     chatIdsSet += id
