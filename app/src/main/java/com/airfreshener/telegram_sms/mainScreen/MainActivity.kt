@@ -91,6 +91,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         lifecycleScope.launch { viewModel.settings.collect { settings -> showSettings(settings) } }
         lifecycleScope.launch { viewModel.isLoading.collect { binding.progressView.isVisible = it } }
         lifecycleScope.launch { viewModel.showPrivacyDialog.collect { showPrivacyDialog() } }
+        lifecycleScope.launch { viewModel.showSnackBar.collect { showPrivacyDialog() } }
         setListeners()
     }
 
@@ -151,9 +152,9 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         binding.privacySwitch.isChecked = settings.isPrivacyModeEnabled && settings.isPrivacyMode
         binding.chatCommandSwitch.isChecked = settings.isChatCommand
         binding.verificationCodeSwitch.isChecked = settings.isVerificationCode
-        val isDohEnbled = Build.VERSION.SDK_INT < Build.VERSION_CODES.N || PaperUtils.getProxyConfig().enable.not() // TODO
-        binding.dohSwitch.isEnabled = isDohEnbled
-        binding.dohSwitch.isChecked = isDohEnbled && settings.isDnsOverHttp
+        val isDohEnabled = Build.VERSION.SDK_INT < Build.VERSION_CODES.N || PaperUtils.getProxyConfig().enable.not() // TODO
+        binding.dohSwitch.isEnabled = isDohEnabled
+        binding.dohSwitch.isChecked = isDohEnabled && settings.isDnsOverHttp
         val isDualCards = appContext.isReadPhoneStatePermissionGranted() && OtherUtils.getActiveCard(appContext) > 1 // TODO
         binding.displayDualSimSwitch.isEnabled = isDualCards
         binding.displayDualSimSwitch.isChecked = settings.isDisplayDualSim && isDualCards

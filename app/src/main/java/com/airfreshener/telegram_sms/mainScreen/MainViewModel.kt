@@ -34,6 +34,7 @@ class MainViewModel(
     private val _loading: MutableStateFlow<Boolean> = MutableStateFlow(false)
     val isLoading: Flow<Boolean> = _loading.asStateFlow()
     val showPrivacyDialog: MutableSharedFlow<Unit> = MutableStateFlow(Unit)
+    val showSnackBar: MutableSharedFlow<String?> = MutableStateFlow(null)
 
     init {
         if (!prefsRepository.getPrivacyDialogAgree()) viewModelScope.launch { showPrivacyDialog.emit(Unit) }
