@@ -2,16 +2,13 @@ package com.airfreshener.telegram_sms.mainScreen
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.app.ProgressDialog
 import android.content.DialogInterface
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.text.Editable
 import android.util.Log
-import android.view.KeyEvent
 import android.view.Menu
 import android.view.MenuItem
 import androidx.activity.viewModels
@@ -24,8 +21,8 @@ import androidx.lifecycle.lifecycleScope
 import by.kirich1409.viewbindingdelegate.viewBinding
 import com.airfreshener.telegram_sms.R
 import com.airfreshener.telegram_sms.databinding.ActivityMainBinding
-import com.airfreshener.telegram_sms.model.PollingJson
 import com.airfreshener.telegram_sms.model.Settings
+import com.airfreshener.telegram_sms.model.TelegramChat
 import com.airfreshener.telegram_sms.notificationScreen.NotifyAppsListActivity
 import com.airfreshener.telegram_sms.qrCodeScreen.QrCodeShowActivity
 import com.airfreshener.telegram_sms.scannerScreen.ScannerActivity
@@ -35,8 +32,6 @@ import com.airfreshener.telegram_sms.services.NotificationListenerService
 import com.airfreshener.telegram_sms.services.ResendService
 import com.airfreshener.telegram_sms.utils.Consts
 import com.airfreshener.telegram_sms.utils.ContextUtils.app
-import com.airfreshener.telegram_sms.utils.NetworkUtils
-import com.airfreshener.telegram_sms.utils.OkHttpUtils.toRequestBody
 import com.airfreshener.telegram_sms.utils.OtherUtils
 import com.airfreshener.telegram_sms.utils.OtherUtils.isReadPhoneStatePermissionGranted
 import com.airfreshener.telegram_sms.utils.OtherUtils.requestReadPhoneStatePermission
@@ -46,22 +41,16 @@ import com.airfreshener.telegram_sms.utils.ServiceUtils.isOwnServiceRunning
 import com.airfreshener.telegram_sms.utils.ServiceUtils.powerManager
 import com.airfreshener.telegram_sms.utils.ServiceUtils.telephonyManager
 import com.google.android.material.snackbar.Snackbar
-import com.google.gson.JsonArray
 import com.google.gson.JsonParser
 import kotlinx.coroutines.launch
-import okhttp3.Call
-import okhttp3.Callback
-import okhttp3.Request
-import okhttp3.Response
-import java.io.IOException
-import java.util.concurrent.TimeUnit
+import androidx.core.net.toUri
 
 class MainActivity : AppCompatActivity(R.layout.activity_main) {
 
     private val viewModel: MainViewModel by viewModels {
         MainViewModelFactory(applicationContext) }
     private val prefsRepository by lazy { app().prefsRepository }
-    private val logRepository by lazy { app().logRepository }
+    private val logger by lazy { app().logger }
     private val binding by viewBinding(ActivityMainBinding::bind)
 
     private val navigator by lazy { MainActivityNavigator(this, prefsRepository) }
@@ -109,7 +98,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         binding.trustedPhoneNumberEditview.doAfterTextChanged { text: Editable? ->
             viewModel.trustedPhoneNumberChanged(text?.toString().orEmpty())
         }
-        binding.getIdButton.setOnClickListener { onGetIdClicked() }
+        binding.getIdButton.setOnClickListener { viewModel.onGetIdClicked() }
         binding.saveButton.setOnClickListener { onSaveClicked() }
         binding.stopButton.setOnClickListener { viewModel.onStopClicked() }
         binding.updateServicesStatusButton.setOnClickListener { updateServicesStatus() }
@@ -120,6 +109,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         lifecycleScope.launch { viewModel.isLoading.collect { binding.progressView.isVisible = it } }
         lifecycleScope.launch { viewModel.showPrivacyDialog.collect { showPrivacyDialog() } }
         lifecycleScope.launch { viewModel.showSnackBar.collect { snackbar(it) } }
+        lifecycleScope.launch { viewModel.showSelectChatList.collect { showSelectChatList(it) } }
     }
 
     private fun onSaveClicked() {
@@ -128,7 +118,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             val hasIgnored = powerManager.isIgnoringBatteryOptimizations(packageName)
             if (!hasIgnored) {
                 val action = android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
-                val intent = Intent(action).setData(Uri.parse("package:$packageName"))
+                val intent = Intent(action).setData("package:$packageName".toUri())
                 if (intent.resolveActivityInfo(packageManager, PackageManager.MATCH_DEFAULT_ONLY) != null) {
                     startActivity(intent)
                 }
@@ -159,115 +149,14 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         binding.displayDualSimSwitch.isChecked = settings.isDisplayDualSim && isDualCards
     }
 
-    private fun onGetIdClicked() {
-        val appContext = applicationContext
-        val settings = viewModel.settings.value
-        if (settings.botToken.isEmpty()) {
-            snackbar(R.string.token_not_configure)
-            return
-        }
-        Thread { ServiceUtils.stopAllServices(appContext) }.start()
-        val progressDialog = ProgressDialog(this@MainActivity)
-        progressDialog.setProgressStyle(ProgressDialog.STYLE_SPINNER)
-        progressDialog.setTitle(appContext.getString(R.string.get_recent_chat_title))
-        progressDialog.setMessage(appContext.getString(R.string.get_recent_chat_message))
-        progressDialog.isIndeterminate = false
-        progressDialog.setCancelable(false)
-        progressDialog.show()
-        val requestUri = NetworkUtils.getUrl(settings.botToken, "getUpdates")
-        val okhttpClient = NetworkUtils.getOkhttpObj(settings)
-            .newBuilder()
-            .readTimeout(60, TimeUnit.SECONDS)
-            .build()
-        val requestBody = PollingJson()
-        requestBody.timeout = 60
-        val body = requestBody.toRequestBody()
-        val request: Request = Request.Builder().url(requestUri).method("POST", body).build()
-        val call = okhttpClient.newCall(request)
-        progressDialog.setOnKeyListener { _: DialogInterface?, _: Int, keyEvent: KeyEvent ->
-            if (keyEvent.keyCode == KeyEvent.KEYCODE_BACK) {
-                call.cancel()
+    private fun showSelectChatList(chatsList: List<TelegramChat>) {
+        AlertDialog.Builder(binding.root.context)
+            .setTitle(R.string.select_chat)
+            .setItems(chatsList.map { it.title }.toTypedArray()) { _: DialogInterface?, i: Int ->
+                binding.chatIdEditview.setText(chatsList[i].id)
             }
-            false
-        }
-        val errorHead = "Get chat ID failed: "
-        call.enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                e.printStackTrace()
-                progressDialog.cancel()
-                val errorMessage = errorHead + e.message
-                logRepository.writeLog(errorMessage)
-                snackbar(errorMessage)
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                progressDialog.cancel()
-                val responseBody = response.body
-                val responseBodyStr = responseBody?.string()
-                val responseCode = response.code
-                if (responseCode != 200 || responseBodyStr == null) {
-                    val description = responseBodyStr?.let { JsonParser.parseString(it).asJsonObject }
-                        ?.get("description")?.asString
-                    val errorMessage = errorHead + description
-                    logRepository.writeLog(errorMessage)
-                    snackbar(errorMessage)
-                    responseBody?.close()
-                    return
-                }
-                val resultObj = JsonParser.parseString(responseBodyStr).asJsonObject
-                val chatList = resultObj.getAsJsonArray("result")
-                if (chatList.size() == 0) {
-                    snackbar(R.string.unable_get_recent)
-                    responseBody.close()
-                    return
-                }
-                val (chatNameList, chatIdList) = parseChats(chatList)
-
-                runOnUiThread {
-                    AlertDialog.Builder(binding.root.context)
-                        .setTitle(R.string.select_chat)
-                        .setItems(
-                            chatNameList.toTypedArray<String>()
-                        ) { _: DialogInterface?, i: Int ->
-                            binding.chatIdEditview.setText(chatIdList[i])
-                        }
-                        .setPositiveButton(appContext.getString(R.string.cancel_button), null)
-                        .show()
-                }
-            }
-
-            private fun parseChats(chatList: JsonArray): Pair<List<String>, List<String>> {
-                val chatNameList = ArrayList<String>()
-                val chatIdList = ArrayList<String>()
-                for (item in chatList) {
-                    val itemObj = item.asJsonObject
-                    if (itemObj.has("message")) {
-                        val messageObj = itemObj["message"].asJsonObject
-                        val chatObj = messageObj["chat"].asJsonObject
-                        if (!chatIdList.contains(chatObj["id"].asString)) {
-                            var username = ""
-                            chatObj["username"]?.asString?.let { username = it }
-                            chatObj["title"]?.asString?.let { username = it }
-                            if (username == "" && !chatObj.has("username")) {
-                                chatObj["first_name"]?.asString?.let { username = it }
-                                chatObj["last_name"]?.asString?.let { username += " $it" }
-                            }
-                            chatNameList.add(username + "(" + chatObj["type"].asString + ")")
-                            chatIdList.add(chatObj["id"].asString)
-                        }
-                    }
-                    if (itemObj.has("channel_post")) {
-                        val messageObj = itemObj["channel_post"].asJsonObject
-                        val chatObj = messageObj["chat"].asJsonObject
-                        if (!chatIdList.contains(chatObj["id"].asString)) {
-                            chatNameList.add(chatObj["title"].asString + "(Channel)")
-                            chatIdList.add(chatObj["id"].asString)
-                        }
-                    }
-                }
-                return chatNameList to chatIdList
-            }
-        })
+            .setPositiveButton(applicationContext.getString(R.string.cancel_button), null)
+            .show()
     }
 
     private fun showPrivacyDialog() {
@@ -398,7 +287,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (data == null) {
-            Log.d(TAG, "onActivityResult: data is null")
+            logger.e(TAG, "onActivityResult: data is null")
             return
         }
         if (requestCode == COMMON_PERMISSIONS_CODE) {

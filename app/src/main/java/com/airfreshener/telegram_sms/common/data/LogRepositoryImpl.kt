@@ -1,7 +1,6 @@
 package com.airfreshener.telegram_sms.common.data
 
 import android.content.Context
-import android.os.Build
 import android.util.Log
 import com.airfreshener.telegram_sms.R
 import com.airfreshener.telegram_sms.utils.PaperUtils
@@ -16,6 +15,7 @@ import java.io.IOException
 import java.io.InputStreamReader
 import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.LinkedList
 import java.util.Locale
 
 
@@ -24,7 +24,7 @@ class LogRepositoryImpl(
 ) : LogRepository {
 
     private val initialLog = listOf(appContext.getString(R.string.no_logs))
-    private val list: ArrayList<String> = ArrayList()
+    private val list: LinkedList<String> = LinkedList()
     private val _logs: MutableStateFlow<List<String>> = MutableStateFlow(initialList())
     override val logs: StateFlow<List<String>> = _logs.asStateFlow()
 
@@ -54,7 +54,6 @@ class LogRepositoryImpl(
     }
 
     override fun writeLog(log: String) {
-        Log.i("write_log", log)
         val simpleDateFormat = SimpleDateFormat(appContext.getString(R.string.time_format), Locale.UK)
         val writeString = "${simpleDateFormat.format(Date(System.currentTimeMillis()))} $log\n"
         val logCount = PaperUtils.getSystemBook().tryRead("log_count", 0)
@@ -64,11 +63,27 @@ class LogRepositoryImpl(
         PaperUtils.getSystemBook().write("log_count", logCount + 1)
         writeLogFile(writeString, Context.MODE_APPEND)
         _logs.value = list.apply {
-            if (size == 100 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            if (size == 100) {
                 removeFirst()
             }
             add(writeString)
         }
+    }
+
+    override fun d(tag: String, message: String) {
+        writeLog("$tag/D: $message")
+    }
+
+    override fun e(tag: String, message: String, throwable: Throwable?) {
+        writeLog("$tag/E: $message")
+    }
+
+    override fun i(tag: String, message: String) {
+        writeLog("$tag/I: $message")
+    }
+
+    override fun w(tag: String, message: String) {
+        writeLog("$tag/W: $message")
     }
 
     override fun resetLogFile() {
