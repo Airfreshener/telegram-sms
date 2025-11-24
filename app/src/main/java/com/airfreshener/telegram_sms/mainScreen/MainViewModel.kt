@@ -3,26 +3,36 @@ package com.airfreshener.telegram_sms.mainScreen
 import android.content.Context
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
+import android.os.PowerManager
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.airfreshener.telegram_sms.R
 import com.airfreshener.telegram_sms.common.data.LogRepository
 import com.airfreshener.telegram_sms.common.data.PrefsRepository
+import com.airfreshener.telegram_sms.common.data.StringsProvider
 import com.airfreshener.telegram_sms.migration.UpdateVersion1
+import com.airfreshener.telegram_sms.model.RequestMessage
 import com.airfreshener.telegram_sms.model.Settings
 import com.airfreshener.telegram_sms.utils.Consts
-import com.airfreshener.telegram_sms.utils.PaperUtils
+import com.airfreshener.telegram_sms.utils.NetworkUtils
+import com.airfreshener.telegram_sms.utils.OkHttpUtils.toRequestBody
+import com.airfreshener.telegram_sms.utils.PaperUtils.DEFAULT_BOOK
+import com.airfreshener.telegram_sms.utils.PaperUtils.SYSTEM_BOOK
 import com.airfreshener.telegram_sms.utils.PaperUtils.tryRead
 import com.airfreshener.telegram_sms.utils.ServiceUtils
 import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import okhttp3.Request
 
 class MainViewModel(
+    private val stringsProvider: StringsProvider,
     private val appContext: Context,
     private val prefsRepository: PrefsRepository,
     private val logRepository: LogRepository,
@@ -33,11 +43,13 @@ class MainViewModel(
 
     private val _loading: MutableStateFlow<Boolean> = MutableStateFlow(false)
     val isLoading: Flow<Boolean> = _loading.asStateFlow()
-    val showPrivacyDialog: MutableSharedFlow<Unit> = MutableStateFlow(Unit)
-    val showSnackBar: MutableSharedFlow<String?> = MutableStateFlow(null)
+    val showPrivacyDialog: MutableSharedFlow<Unit> = MutableSharedFlow()
+    val showSnackBar: MutableSharedFlow<String> = MutableSharedFlow()
 
     init {
-        if (!prefsRepository.getPrivacyDialogAgree()) viewModelScope.launch { showPrivacyDialog.emit(Unit) }
+        if (!prefsRepository.getPrivacyDialogAgree()) {
+            viewModelScope.launch { showPrivacyDialog.emit(Unit) }
+        }
         val settings = prefsRepository.getSettings()
         if (prefsRepository.getInitialized()) {
             updateConfig()
@@ -128,9 +140,91 @@ class MainViewModel(
         _settings.value = newSettings
     }
 
+    fun onStopClicked() {
+        val appContext = appContext
+        Thread { ServiceUtils.stopAllServices(appContext) }.start()
+    }
+
+    private suspend fun showSnackBar(str: String) {
+        showSnackBar.emit(str)
+    }
+    private suspend fun showSnackBar(resId: Int) {
+        showSnackBar.emit(stringsProvider.getString(resId))
+    }
+
+    fun onSaveClicked() {
+        viewModelScope.launch {
+            val appContext = appContext
+            val botTokenSaved = prefsRepository.getSettings().botToken
+            val newSettings = _settings.value
+            if (newSettings.botToken.isEmpty() || newSettings.chatId.isEmpty()) {
+                showSnackBar(R.string.chat_id_or_token_not_config)
+                return@launch
+            }
+            if (newSettings.isFallbackSms && newSettings.trustedPhoneNumber.isEmpty()) {
+                showSnackBar(R.string.trusted_phone_number_empty)
+                return@launch
+            }
+            if (!prefsRepository.getPrivacyDialogAgree()) {
+                showPrivacyDialog.emit(Unit)
+                return@launch
+            }
+
+            // val progressDialog = ProgressDialog(this)
+            // progressDialog.setProgressStyle(ProgressDialog.STYLE_SPINNER)
+            // progressDialog.setTitle(appContext.getString(R.string.connect_wait_title))
+            // progressDialog.setMessage(appContext.getString(R.string.connect_wait_message))
+            // progressDialog.isIndeterminate = false
+            // progressDialog.setCancelable(false)
+            // progressDialog.show()
+
+            val requestUri = NetworkUtils.getUrl(newSettings.botToken, "sendMessage")
+            val requestBody = RequestMessage().apply {
+                chat_id = newSettings.chatId
+                text = appContext.getString(R.string.success_connect)
+            }
+            val body = requestBody.toRequestBody()
+            val okhttpClient = NetworkUtils.getOkhttpObj(newSettings)
+            val request: Request = Request.Builder().url(requestUri).post(body).build()
+            val call = okhttpClient.newCall(request)
+            val errorHead = "Send message failed: "
+            val result = runCatching { call.execute() }
+            // progressDialog.cancel()
+            if (result.isSuccess && result.getOrNull()?.code == 200) {
+                if (newSettings.botToken != botTokenSaved) {
+                    Log.i(
+                        TAG, "onResponse: The current bot token does not match the " +
+                                "saved bot token, clearing the message database."
+                    )
+                    DEFAULT_BOOK.destroy()
+                }
+                SYSTEM_BOOK.write("version", Consts.SYSTEM_CONFIG_VERSION)
+                checkVersionUpgrade(logRepository, appContext, false)
+
+                prefsRepository.setSettings(newSettings)
+
+                Thread {
+                    ServiceUtils.stopAllServices(appContext)
+                    try {
+                        Thread.sleep(1000)
+                    } catch (e: InterruptedException) {
+                        e.printStackTrace()
+                    }
+                    ServiceUtils.startServices(appContext, newSettings)
+                }.start()
+                showSnackBar(R.string.success)
+            } else {
+                result.exceptionOrNull()?.printStackTrace()
+                val resultObj = JsonParser.parseString(result.getOrNull()?.body?.string()).asJsonObject
+                val errorMessage = errorHead + (resultObj?.get("description") ?: result.exceptionOrNull()?.message)
+                logRepository.writeLog(errorMessage)
+                showSnackBar(errorMessage)
+            }
+        }
+    }
 
     private fun checkVersionUpgrade(logRepository: LogRepository, context: Context, resetLog: Boolean) {
-        val versionCode = PaperUtils.SYSTEM_BOOK.tryRead("version_code", 0)
+        val versionCode = SYSTEM_BOOK.tryRead("version_code", 0)
         val packageManager = context.packageManager
         val packageInfo: PackageInfo
         val currentVersionCode: Int
@@ -145,12 +239,12 @@ class MainViewModel(
             if (resetLog) {
                 logRepository.resetLogFile()
             }
-            PaperUtils.SYSTEM_BOOK.write("version_code", currentVersionCode)
+            SYSTEM_BOOK.write("version_code", currentVersionCode)
         }
     }
 
     private fun updateConfig() {
-        val storeVersion = PaperUtils.SYSTEM_BOOK.tryRead("version", 0)
+        val storeVersion = SYSTEM_BOOK.tryRead("version", 0)
         if (storeVersion == Consts.SYSTEM_CONFIG_VERSION) {
             UpdateVersion1().checkError()
             return

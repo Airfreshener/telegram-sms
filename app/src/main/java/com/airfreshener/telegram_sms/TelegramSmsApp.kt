@@ -5,13 +5,19 @@ import com.airfreshener.telegram_sms.common.data.LogRepository
 import com.airfreshener.telegram_sms.common.data.LogRepositoryImpl
 import com.airfreshener.telegram_sms.common.data.PrefsRepository
 import com.airfreshener.telegram_sms.common.data.SharedPrefsRepository
+import com.airfreshener.telegram_sms.common.data.StringsProvider
 import com.airfreshener.telegram_sms.common.data.TelegramRepository
 import com.airfreshener.telegram_sms.common.data.UssdRepository
 import com.airfreshener.telegram_sms.utils.PaperUtils
+import com.airfreshener.telegram_sms.utils.ServiceUtils.powerManager
 
 class TelegramSmsApp : Application() {
 
     // TODO move dependencies to some DI
+
+    val stringsProvider: StringsProvider by lazy {
+        StringsProvider(applicationContext)
+    }
 
     val prefsRepository: PrefsRepository by lazy {
         SharedPrefsRepository(

@@ -1,6 +1,7 @@
 package com.airfreshener.telegram_sms.common.data
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import com.airfreshener.telegram_sms.R
 import com.airfreshener.telegram_sms.utils.PaperUtils
@@ -13,8 +14,6 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStreamReader
-import java.nio.ByteBuffer
-import java.nio.channels.FileChannel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -58,14 +57,16 @@ class LogRepositoryImpl(
         Log.i("write_log", log)
         val simpleDateFormat = SimpleDateFormat(appContext.getString(R.string.time_format), Locale.UK)
         val writeString = "${simpleDateFormat.format(Date(System.currentTimeMillis()))} $log\n"
-        var logCount = PaperUtils.getSystemBook().tryRead("log_count", 0)
+        val logCount = PaperUtils.getSystemBook().tryRead("log_count", 0)
         if (logCount >= 50000) {
             resetLogFile()
         }
-        PaperUtils.getSystemBook().write("log_count", ++logCount)
+        PaperUtils.getSystemBook().write("log_count", logCount + 1)
         writeLogFile(writeString, Context.MODE_APPEND)
         _logs.value = list.apply {
-            if (size == 100) removeFirst()
+            if (size == 100 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+                removeFirst()
+            }
             add(writeString)
         }
     }

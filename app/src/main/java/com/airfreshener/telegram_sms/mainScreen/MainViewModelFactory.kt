@@ -13,6 +13,7 @@ class MainViewModelFactory(
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         val app = appContext.app()
         return MainViewModel(
+            stringsProvider = app.stringsProvider,
             appContext = appContext,
             prefsRepository = app.prefsRepository,
             logRepository = app.logRepository,

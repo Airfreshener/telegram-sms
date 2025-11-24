@@ -4,10 +4,8 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.ProgressDialog
 import android.content.ActivityNotFoundException
-import android.content.Context
 import android.content.DialogInterface
 import android.content.Intent
-import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -29,12 +27,9 @@ import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.lifecycleScope
 import by.kirich1409.viewbindingdelegate.viewBinding
 import com.airfreshener.telegram_sms.R
-import com.airfreshener.telegram_sms.common.data.LogRepository
 import com.airfreshener.telegram_sms.databinding.ActivityMainBinding
 import com.airfreshener.telegram_sms.logScreen.LogcatActivity
-import com.airfreshener.telegram_sms.migration.UpdateVersion1
 import com.airfreshener.telegram_sms.model.PollingJson
-import com.airfreshener.telegram_sms.model.RequestMessage
 import com.airfreshener.telegram_sms.model.Settings
 import com.airfreshener.telegram_sms.notificationScreen.NotifyAppsListActivity
 import com.airfreshener.telegram_sms.qrCodeScreen.QrCodeShowActivity
@@ -52,9 +47,6 @@ import com.airfreshener.telegram_sms.utils.OtherUtils
 import com.airfreshener.telegram_sms.utils.OtherUtils.isReadPhoneStatePermissionGranted
 import com.airfreshener.telegram_sms.utils.OtherUtils.requestReadPhoneStatePermission
 import com.airfreshener.telegram_sms.utils.PaperUtils
-import com.airfreshener.telegram_sms.utils.PaperUtils.DEFAULT_BOOK
-import com.airfreshener.telegram_sms.utils.PaperUtils.SYSTEM_BOOK
-import com.airfreshener.telegram_sms.utils.PaperUtils.tryRead
 import com.airfreshener.telegram_sms.utils.ServiceUtils
 import com.airfreshener.telegram_sms.utils.ServiceUtils.isOwnServiceRunning
 import com.airfreshener.telegram_sms.utils.ServiceUtils.powerManager
@@ -85,17 +77,13 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     private val privacyPolice: String
         get() = "$WEB_VIEW_PAGES_URL/${applicationContext.getString(R.string.Lang)}/privacy-policy"
 
-    @SuppressLint("BatteryLife")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        lifecycleScope.launch { viewModel.settings.collect { settings -> showSettings(settings) } }
-        lifecycleScope.launch { viewModel.isLoading.collect { binding.progressView.isVisible = it } }
-        lifecycleScope.launch { viewModel.showPrivacyDialog.collect { showPrivacyDialog() } }
-        lifecycleScope.launch { viewModel.showSnackBar.collect { showPrivacyDialog() } }
-        setListeners()
+        setViewModelSubscriptions()
+        setViewListeners()
     }
 
-    private fun setListeners() {
+    private fun setViewListeners() {
         val appContext = applicationContext
         binding.dohSwitch.setOnCheckedChangeListener { _, isChecked -> viewModel.dnsOverHttpChecked(isChecked) }
         binding.privacySwitch.setOnCheckedChangeListener { _, isChecked -> viewModel.privacyModeChanged(isChecked) }
@@ -134,10 +122,32 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         }
         binding.getIdButton.setOnClickListener { onGetIdClicked() }
         binding.saveButton.setOnClickListener { onSaveClicked() }
-        binding.stopButton.setOnClickListener { onStopClicked() }
+        binding.stopButton.setOnClickListener { viewModel.onStopClicked() }
         binding.updateServicesStatusButton.setOnClickListener { updateServicesStatus() }
     }
 
+    private fun setViewModelSubscriptions() {
+        lifecycleScope.launch { viewModel.settings.collect { settings -> showSettings(settings) } }
+        lifecycleScope.launch { viewModel.isLoading.collect { binding.progressView.isVisible = it } }
+        lifecycleScope.launch { viewModel.showPrivacyDialog.collect { showPrivacyDialog() } }
+        lifecycleScope.launch { viewModel.showSnackBar.collect { snackbar(it) } }
+    }
+
+    private fun onSaveClicked() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            ActivityCompat.requestPermissions(this, requestingPermissions, COMMON_PERMISSIONS_CODE)
+            val hasIgnored = powerManager.isIgnoringBatteryOptimizations(packageName)
+            if (!hasIgnored) {
+                val action = android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+                val intent = Intent(action).setData(Uri.parse("package:$packageName"))
+                if (intent.resolveActivityInfo(packageManager, PackageManager.MATCH_DEFAULT_ONLY) != null) {
+                    startActivity(intent)
+                }
+            }
+        }
+
+        viewModel.onSaveClicked()
+    }
     private fun showSettings(settings: Settings) {
         val appContext = applicationContext
         binding.botTokenEditview.setTextKeepState(settings.botToken)
@@ -158,116 +168,6 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         val isDualCards = appContext.isReadPhoneStatePermissionGranted() && OtherUtils.getActiveCard(appContext) > 1 // TODO
         binding.displayDualSimSwitch.isEnabled = isDualCards
         binding.displayDualSimSwitch.isChecked = settings.isDisplayDualSim && isDualCards
-    }
-
-    private fun onStopClicked() {
-        val appContext = applicationContext
-        Thread { ServiceUtils.stopAllServices(appContext) }.start()
-    }
-
-    private fun onSaveClicked() {
-        val appContext = applicationContext
-        val botTokenSaved = prefsRepository.getSettings().botToken
-
-        val newSettings = Settings(
-            isDnsOverHttp = binding.dohSwitch.isChecked,
-            isPrivacyMode = binding.privacySwitch.isChecked,
-            isChatCommand = binding.chatCommandSwitch.isChecked,
-            isFallbackSms = binding.fallbackSmsSwitch.isChecked,
-            isChargerStatus = binding.chargerStatusSwitch.isChecked,
-            isBatteryMonitoring = binding.batteryMonitoringSwitch.isChecked,
-            isDisplayDualSim = binding.displayDualSimSwitch.isChecked,
-            isVerificationCode = binding.verificationCodeSwitch.isChecked,
-            chatId = binding.chatIdEditview.text.toString().trim { it <= ' ' },
-            botToken = binding.botTokenEditview.text.toString().trim { it <= ' ' },
-            trustedPhoneNumber = binding.trustedPhoneNumberEditview.text.toString().trim { it <= ' ' },
-        )
-
-        if (newSettings.botToken.isEmpty() || newSettings.chatId.isEmpty()) {
-            snackbar(R.string.chat_id_or_token_not_config)
-            return
-        }
-        if (newSettings.isFallbackSms && newSettings.trustedPhoneNumber.isEmpty()) {
-            snackbar(R.string.trusted_phone_number_empty)
-            return
-        }
-        if (!prefsRepository.getPrivacyDialogAgree()) {
-            showPrivacyDialog()
-            return
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            ActivityCompat.requestPermissions(this, requistingPermissions, COMMON_PERMISSIONS_CODE)
-            val hasIgnored = powerManager.isIgnoringBatteryOptimizations(packageName)
-            if (!hasIgnored) {
-                val action = android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
-                val intent = Intent(action).setData(Uri.parse("package:$packageName"))
-                if (intent.resolveActivityInfo(packageManager, PackageManager.MATCH_DEFAULT_ONLY) != null) {
-                    startActivity(intent)
-                }
-            }
-        }
-        val progressDialog = ProgressDialog(this)
-        progressDialog.setProgressStyle(ProgressDialog.STYLE_SPINNER)
-        progressDialog.setTitle(appContext.getString(R.string.connect_wait_title))
-        progressDialog.setMessage(appContext.getString(R.string.connect_wait_message))
-        progressDialog.isIndeterminate = false
-        progressDialog.setCancelable(false)
-        progressDialog.show()
-
-        val requestUri = NetworkUtils.getUrl(newSettings.botToken, "sendMessage")
-        val requestBody = RequestMessage().apply {
-            chat_id = newSettings.chatId
-            text = appContext.getString(R.string.success_connect)
-        }
-        val body = requestBody.toRequestBody()
-        val okhttpClient = NetworkUtils.getOkhttpObj(newSettings)
-        val request: Request = Request.Builder().url(requestUri).post(body).build()
-        val call = okhttpClient.newCall(request)
-        val errorHead = "Send message failed: "
-        call.enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                e.printStackTrace()
-                progressDialog.cancel()
-                val errorMessage = errorHead + e.message
-                logRepository.writeLog(errorMessage)
-                snackbar(errorMessage)
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                progressDialog.cancel()
-                if (response.code != 200) {
-                    val responseBody = response.body ?: return
-                    val result = responseBody.string()
-                    val resultObj = JsonParser.parseString(result).asJsonObject
-                    val errorMessage = errorHead + resultObj["description"]
-                    logRepository.writeLog(errorMessage)
-                    snackbar(errorMessage)
-                    responseBody.close()
-                    return
-                }
-                if (newSettings.botToken != botTokenSaved) {
-                    Log.i(TAG, "onResponse: The current bot token does not match the " +
-                            "saved bot token, clearing the message database."
-                    )
-                    DEFAULT_BOOK.destroy()
-                }
-                SYSTEM_BOOK.write("version", Consts.SYSTEM_CONFIG_VERSION)
-                checkVersionUpgrade(logRepository, appContext, false)
-
-                prefsRepository.setSettings(newSettings)
-
-                Thread {
-                    ServiceUtils.stopAllServices(appContext)
-                    try {
-                        Thread.sleep(1000)
-                    } catch (e: InterruptedException) {
-                        e.printStackTrace()
-                    }
-                    ServiceUtils.startServices(appContext, newSettings)
-                }.start()
-                snackbar(R.string.success)
-            }
-        })
     }
 
     private fun onGetIdClicked() {
@@ -599,7 +499,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         private const val PHONE_STATE_PERMISSION_CODE = 1 // ?? TODO
         private const val CAMERA_PERMISSION_CODE = 0
 
-        private val requistingPermissions = arrayOf(
+        private val requestingPermissions = arrayOf(
             Manifest.permission.READ_SMS,
             Manifest.permission.SEND_SMS,
             Manifest.permission.RECEIVE_SMS,
@@ -608,38 +508,6 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
             Manifest.permission.READ_CALL_LOG
         )
         private var setPermissionBack = false
-
-        private fun checkVersionUpgrade(logRepository: LogRepository, context: Context, resetLog: Boolean) {
-            val versionCode = SYSTEM_BOOK.tryRead("version_code", 0)
-            val packageManager = context.packageManager
-            val packageInfo: PackageInfo
-            val currentVersionCode: Int
-            try {
-                packageInfo = packageManager.getPackageInfo(context.packageName, 0)
-                currentVersionCode = packageInfo.versionCode
-            } catch (e: PackageManager.NameNotFoundException) {
-                e.printStackTrace()
-                return
-            }
-            if (versionCode != currentVersionCode) {
-                if (resetLog) {
-                    logRepository.resetLogFile()
-                }
-                SYSTEM_BOOK.write("version_code", currentVersionCode)
-            }
-        }
-
-        private fun updateConfig() {
-            val storeVersion = SYSTEM_BOOK.tryRead("version", 0)
-            if (storeVersion == Consts.SYSTEM_CONFIG_VERSION) {
-                UpdateVersion1().checkError()
-                return
-            }
-            when (storeVersion) {
-                0 -> UpdateVersion1().update()
-                else -> Log.i(TAG, "update_config: Can't find a version that can be updated")
-            }
-        }
 
     }
 }
