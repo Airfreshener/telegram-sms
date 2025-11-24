@@ -3,7 +3,6 @@ package com.airfreshener.telegram_sms.mainScreen
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.ProgressDialog
-import android.content.ActivityNotFoundException
 import android.content.DialogInterface
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -18,17 +17,13 @@ import android.view.MenuItem
 import androidx.activity.viewModels
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.browser.customtabs.CustomTabColorSchemeParams
-import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import androidx.core.view.isVisible
 import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.lifecycleScope
 import by.kirich1409.viewbindingdelegate.viewBinding
 import com.airfreshener.telegram_sms.R
 import com.airfreshener.telegram_sms.databinding.ActivityMainBinding
-import com.airfreshener.telegram_sms.logScreen.LogcatActivity
 import com.airfreshener.telegram_sms.model.PollingJson
 import com.airfreshener.telegram_sms.model.Settings
 import com.airfreshener.telegram_sms.notificationScreen.NotifyAppsListActivity
@@ -38,7 +33,6 @@ import com.airfreshener.telegram_sms.services.BatteryService
 import com.airfreshener.telegram_sms.services.chat.ChatCommandService
 import com.airfreshener.telegram_sms.services.NotificationListenerService
 import com.airfreshener.telegram_sms.services.ResendService
-import com.airfreshener.telegram_sms.spamListScreen.SpamListActivity
 import com.airfreshener.telegram_sms.utils.Consts
 import com.airfreshener.telegram_sms.utils.ContextUtils.app
 import com.airfreshener.telegram_sms.utils.NetworkUtils
@@ -51,7 +45,6 @@ import com.airfreshener.telegram_sms.utils.ServiceUtils
 import com.airfreshener.telegram_sms.utils.ServiceUtils.isOwnServiceRunning
 import com.airfreshener.telegram_sms.utils.ServiceUtils.powerManager
 import com.airfreshener.telegram_sms.utils.ServiceUtils.telephonyManager
-import com.airfreshener.telegram_sms.utils.ui.MenuUtils
 import com.google.android.material.snackbar.Snackbar
 import com.google.gson.JsonArray
 import com.google.gson.JsonParser
@@ -65,17 +58,13 @@ import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity(R.layout.activity_main) {
 
-    private val viewModel: MainViewModel by viewModels { MainViewModelFactory(applicationContext) }
+    private val viewModel: MainViewModel by viewModels {
+        MainViewModelFactory(applicationContext) }
     private val prefsRepository by lazy { app().prefsRepository }
     private val logRepository by lazy { app().logRepository }
     private val binding by viewBinding(ActivityMainBinding::bind)
 
-    private val qaUrl: String
-        get() = "$WEB_VIEW_PAGES_URL/${applicationContext.getString(R.string.Lang)}/Q&A"
-    private val manualUrl: String
-        get() = "$WEB_VIEW_PAGES_URL/${applicationContext.getString(R.string.Lang)}/user-manual"
-    private val privacyPolice: String
-        get() = "$WEB_VIEW_PAGES_URL/${applicationContext.getString(R.string.Lang)}/privacy-policy"
+    private val navigator by lazy { MainActivityNavigator(this, prefsRepository) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -282,31 +271,12 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     }
 
     private fun showPrivacyDialog() {
-        val builder = AlertDialog.Builder(this)
-        builder.setTitle(R.string.privacy_reminder_title)
-        builder.setMessage(R.string.privacy_reminder_information)
-        builder.setCancelable(false)
-        builder.setPositiveButton(R.string.agree) { _: DialogInterface?, _: Int ->
-            prefsRepository.setPrivacyDialogAgree(true)
-        }
-        builder.setNeutralButton(R.string.visit_page) { _: DialogInterface?, _: Int ->
-            val privacyBuilder = CustomTabsIntent.Builder()
-            privacyBuilder.setToolbarColor(
-                ContextCompat.getColor(applicationContext, R.color.colorPrimary)
-            )
-            val customTabsIntent = privacyBuilder.build()
-            customTabsIntent.intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            try {
-                customTabsIntent.launchUrl(applicationContext, Uri.parse(privacyPolice))
-            } catch (e: ActivityNotFoundException) {
-                e.printStackTrace()
-                snackbar("Browser not found.")
+        navigator.showPrivacyDialog(
+            onPositiveClick = { prefsRepository.setPrivacyDialogAgree(true) },
+            onNeutralClick = {
+                navigator.showPrivacyPolicy(onFailure = { snackbar("Browser not found.") })
             }
-        }
-        builder.create().apply {
-            getButton(AlertDialog.BUTTON_POSITIVE)?.isAllCaps = false
-            getButton(AlertDialog.BUTTON_NEUTRAL)?.isAllCaps = false
-        }.show()
+        )
     }
 
     override fun onResume() {
@@ -363,23 +333,14 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
     @SuppressLint("NonConstantResourceId")
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         val appContext = applicationContext
-        var fileName: String? = null
         when (item.itemId) {
-            R.id.about_menu_item -> {
-                showAboutScreen()
-                return true
-            }
-
-            R.id.scan_menu_item -> {
-                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), CAMERA_PERMISSION_CODE)
-                return true
-            }
-
-            R.id.logcat_menu_item -> {
-                val logcatIntent = Intent(this, LogcatActivity::class.java)
-                startActivity(logcatIntent)
-                return true
-            }
+            R.id.about_menu_item -> navigator.showAboutScreen()
+            R.id.scan_menu_item -> navigator.requestCameraPermission()
+            R.id.logcat_menu_item -> navigator.showLogsScreen()
+            R.id.spam_sms_keyword_menu_item -> navigator.showSpamList()
+            R.id.user_manual_menu_item -> navigator.showManual(::onWebViewError)
+            R.id.privacy_policy_menu_item -> navigator.showPrivacyPolicy(::onWebViewError)
+            R.id.question_and_answer_menu_item -> navigator.showQA(::onWebViewError)
 
             R.id.config_qrcode_menu_item -> {
                 if (prefsRepository.getInitialized()) {
@@ -387,7 +348,6 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
                 } else {
                     snackbar("Uninitialized.")
                 }
-                return true
             }
 
             R.id.set_notify_menu_item -> {
@@ -400,18 +360,11 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
                     return false
                 }
                 startActivity(Intent(this, NotifyAppsListActivity::class.java))
-                return true
             }
 
-            R.id.spam_sms_keyword_menu_item -> {
-                startActivity(Intent(this, SpamListActivity::class.java))
-                return true
-            }
 
             R.id.set_proxy_menu_item -> {
-                MenuUtils.showProxySettingsDialog(
-                    activity = this,
-                    prefsRepository = prefsRepository,
+                navigator.showProxySettingsDialog(
                     onOkCallback = { isChecked: Boolean ->
                         if (!binding.dohSwitch.isChecked) {
                             binding.dohSwitch.isChecked = true
@@ -419,46 +372,14 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
                         binding.dohSwitch.isEnabled = !isChecked
                     }
                 )
-                return true
             }
 
-            R.id.user_manual_menu_item -> fileName = manualUrl
-            R.id.privacy_policy_menu_item -> fileName = privacyPolice
-            R.id.question_and_answer_menu_item -> fileName = qaUrl
-        }
-        if (fileName == null) return false
-
-        val builder = CustomTabsIntent.Builder()
-        val params = CustomTabColorSchemeParams.Builder()
-            .setToolbarColor(ContextCompat.getColor(appContext, R.color.colorPrimary))
-            .build()
-        builder.setDefaultColorSchemeParams(params)
-        val customTabsIntent = builder.build()
-        try {
-            customTabsIntent.launchUrl(this, Uri.parse(fileName))
-        } catch (e: ActivityNotFoundException) {
-            e.printStackTrace()
-            snackbar("Browser not found.")
+            else -> return false
         }
         return true
     }
 
-    private fun showAboutScreen() {
-        val appContext = applicationContext
-        val packageManager = appContext.packageManager
-        val versionName = try {
-            packageManager.getPackageInfo(appContext.packageName, 0).versionName
-        } catch (e: PackageManager.NameNotFoundException) {
-            e.printStackTrace()
-            "unknown"
-        }
-        val builder = AlertDialog.Builder(this)
-        builder.setTitle(R.string.about_title)
-        builder.setMessage(getString(R.string.about_content) + versionName)
-        builder.setCancelable(false)
-        builder.setPositiveButton(R.string.ok_button, null)
-        builder.show()
-    }
+    private fun onWebViewError() = snackbar("Browser not found.")
 
     private fun updateServicesStatus() {
         val context = applicationContext
@@ -494,10 +415,8 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
 
     companion object {
         private const val TAG = "MainActivity"
-        private const val WEB_VIEW_PAGES_URL = "https://get.telegram-sms.com/guide"
         private const val COMMON_PERMISSIONS_CODE = 1 // ?? TODO
         private const val PHONE_STATE_PERMISSION_CODE = 1 // ?? TODO
-        private const val CAMERA_PERMISSION_CODE = 0
 
         private val requestingPermissions = arrayOf(
             Manifest.permission.READ_SMS,
