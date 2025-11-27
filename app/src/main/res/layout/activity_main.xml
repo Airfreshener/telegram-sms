@@ -55,7 +55,7 @@
                 android:layout_height="wrap_content">
 
                 <EditText
-                    android:id="@+id/trusted_phone_number_editview"
+                    android:id="@+id/trustedPhoneEditText"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:hint="@string/trusted_phone_number"

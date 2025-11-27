@@ -2,15 +2,13 @@ package com.airfreshener.telegram_sms.mainScreen
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.content.DialogInterface
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.text.Editable
-import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -26,82 +24,82 @@ import com.airfreshener.telegram_sms.model.TelegramChat
 import com.airfreshener.telegram_sms.notificationScreen.NotifyAppsListActivity
 import com.airfreshener.telegram_sms.qrCodeScreen.QrCodeShowActivity
 import com.airfreshener.telegram_sms.scannerScreen.ScannerActivity
-import com.airfreshener.telegram_sms.services.BatteryService
-import com.airfreshener.telegram_sms.services.chat.ChatCommandService
-import com.airfreshener.telegram_sms.services.NotificationListenerService
-import com.airfreshener.telegram_sms.services.ResendService
 import com.airfreshener.telegram_sms.utils.Consts
 import com.airfreshener.telegram_sms.utils.ContextUtils.app
 import com.airfreshener.telegram_sms.utils.OtherUtils
-import com.airfreshener.telegram_sms.utils.OtherUtils.isReadPhoneStatePermissionGranted
-import com.airfreshener.telegram_sms.utils.OtherUtils.requestReadPhoneStatePermission
 import com.airfreshener.telegram_sms.utils.PaperUtils
 import com.airfreshener.telegram_sms.utils.ServiceUtils
-import com.airfreshener.telegram_sms.utils.ServiceUtils.isOwnServiceRunning
 import com.airfreshener.telegram_sms.utils.ServiceUtils.powerManager
 import com.airfreshener.telegram_sms.utils.ServiceUtils.telephonyManager
 import com.google.android.material.snackbar.Snackbar
 import com.google.gson.JsonParser
 import kotlinx.coroutines.launch
 import androidx.core.net.toUri
+import com.airfreshener.telegram_sms.utils.isCameraPermissionGranted
+import com.airfreshener.telegram_sms.utils.isReadPhoneStatePermissionGranted
+import com.airfreshener.telegram_sms.utils.requestReadPhoneStatePermission
+import com.google.android.material.switchmaterial.SwitchMaterial
 
 class MainActivity : AppCompatActivity(R.layout.activity_main) {
 
     private val viewModel: MainViewModel by viewModels {
-        MainViewModelFactory(applicationContext) }
+        MainViewModelFactory(applicationContext)
+    }
     private val prefsRepository by lazy { app().prefsRepository }
     private val logger by lazy { app().logger }
     private val binding by viewBinding(ActivityMainBinding::bind)
 
     private val navigator by lazy { MainActivityNavigator(this, prefsRepository) }
 
+    private val scannerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        // This is where you handle the result that comes back from ScannerActivity
+        if (result.resultCode == RESULT_OK) {
+            val data: Intent? = result.data
+            if (data == null) {
+                logger.e(TAG, "onActivityResult: data is null")
+                return@registerForActivityResult
+            }
+
+            if (result.resultCode == Consts.RESULT_CONFIG_JSON) { // It seems you have a custom result code
+                val jsonConfig = JsonParser.parseString(data.getStringExtra("config_json"))?.asJsonObject
+                if (jsonConfig == null) {
+                    snackbar("Invalid config"/*R.string.invalid_config_by_qr_code*/)
+                    return@registerForActivityResult
+                }
+                viewModel.qrCodeScanned(jsonConfig)
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setViewModelSubscriptions()
         setViewListeners()
+        IntRange(1,2).first
     }
 
-    private fun setViewListeners() {
-        val appContext = applicationContext
-        binding.dohSwitch.setOnCheckedChangeListener { _, isChecked -> viewModel.dnsOverHttpChecked(isChecked) }
-        binding.privacySwitch.setOnCheckedChangeListener { _, isChecked -> viewModel.privacyModeChanged(isChecked) }
-        binding.chatCommandSwitch.setOnCheckedChangeListener { _, isChecked -> viewModel.chatCommandChanged(isChecked) }
-        binding.fallbackSmsSwitch.setOnCheckedChangeListener { _, isChecked -> viewModel.fallbackSmsChanged(isChecked) }
-        binding.chargerStatusSwitch.setOnCheckedChangeListener { _, isChecked ->
-            viewModel.chargerStatusChanged(isChecked)
+    private fun setViewListeners() = binding.apply {
+        fun SwitchMaterial.setOnChangeListener(onChange: (Boolean) -> Unit) =
+            setOnCheckedChangeListener { _, isChecked -> onChange(isChecked) }
+        dohSwitch.setOnChangeListener { isChecked -> viewModel.dnsOverHttpChecked(isChecked) }
+        privacySwitch.setOnChangeListener { isChecked -> viewModel.privacyModeChanged(isChecked) }
+        chatCommandSwitch.setOnChangeListener { isChecked -> viewModel.chatCommandChanged(isChecked) }
+        fallbackSmsSwitch.setOnChangeListener { isChecked -> viewModel.fallbackSmsChanged(isChecked) }
+        chargerStatusSwitch.setOnChangeListener { isChecked -> viewModel.chargerStatusChanged(isChecked) }
+        batteryMonitoringSwitch.setOnChangeListener { isChecked -> viewModel.batteryMonitoringChecked(isChecked) }
+        verificationCodeSwitch.setOnChangeListener { isChecked -> viewModel.verificationCodeChecked(isChecked) }
+        displayDualSimSwitch.setOnChangeListener { isChecked ->
+            onDualSimChanged(isChecked)
         }
-        binding.batteryMonitoringSwitch.setOnCheckedChangeListener { _, isChecked ->
-            viewModel.batteryMonitoringChecked(isChecked)
-        }
-        binding.displayDualSimSwitch.setOnCheckedChangeListener { _, isChecked ->
-
-            // TODO move to viewModel
-            if (isChecked) {
-                if (appContext.isReadPhoneStatePermissionGranted().not()) {
-                    binding.displayDualSimSwitch.isChecked = false
-                    requestReadPhoneStatePermission(PHONE_STATE_PERMISSION_CODE)
-                } else {
-                    if (OtherUtils.getActiveCard(appContext) < 2) {
-                        binding.displayDualSimSwitch.isEnabled = false
-                        binding.displayDualSimSwitch.isChecked = false
-                    }
-                }
-            }
-            viewModel.displayDualSimChanged(binding.displayDualSimSwitch.isChecked)
-
-        }
-        binding.verificationCodeSwitch.setOnCheckedChangeListener { _, isChecked ->
-            viewModel.verificationCodeChecked(isChecked)
-        }
-        binding.chatIdEditview.doAfterTextChanged { text -> viewModel.chatIdChanged(text?.toString().orEmpty()) }
-        binding.botTokenEditview.doAfterTextChanged { text -> viewModel.botTokenChanged(text?.toString().orEmpty()) }
-        binding.trustedPhoneNumberEditview.doAfterTextChanged { text: Editable? ->
-            viewModel.trustedPhoneNumberChanged(text?.toString().orEmpty())
-        }
-        binding.getIdButton.setOnClickListener { viewModel.onGetIdClicked() }
-        binding.saveButton.setOnClickListener { onSaveClicked() }
-        binding.stopButton.setOnClickListener { viewModel.onStopClicked() }
-        binding.updateServicesStatusButton.setOnClickListener { updateServicesStatus() }
+        chatIdEditview.doAfterTextChanged { text -> viewModel.chatIdChanged(text?.toString().orEmpty()) }
+        botTokenEditview.doAfterTextChanged { text -> viewModel.botTokenChanged(text?.toString().orEmpty()) }
+        trustedPhoneEditText.doAfterTextChanged { viewModel.trustedPhoneChanged(it?.toString().orEmpty()) }
+        getIdButton.setOnClickListener { viewModel.onGetIdClicked() }
+        saveButton.setOnClickListener { onSaveClicked() }
+        stopButton.setOnClickListener { viewModel.onStopClicked() }
+        updateServicesStatusButton.setOnClickListener { viewModel.onUpdateStatusClicked() }
     }
 
     private fun setViewModelSubscriptions() {
@@ -110,6 +108,24 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         lifecycleScope.launch { viewModel.showPrivacyDialog.collect { showPrivacyDialog() } }
         lifecycleScope.launch { viewModel.showSnackBar.collect { snackbar(it) } }
         lifecycleScope.launch { viewModel.showSelectChatList.collect { showSelectChatList(it) } }
+        lifecycleScope.launch { viewModel.servicesStatus.collect { showServicesStatus(it) } }
+    }
+
+    private fun onDualSimChanged(isChecked: Boolean) {
+        val appContext = applicationContext
+        val switcher = binding.displayDualSimSwitch
+        if (isChecked) {
+            if (appContext.isReadPhoneStatePermissionGranted().not()) {
+                switcher.isChecked = false
+                requestReadPhoneStatePermission(PHONE_STATE_PERMISSION_CODE)
+            } else {
+                if (OtherUtils.getActiveCard(appContext) < 2) {
+                    switcher.isEnabled = false
+                    switcher.isChecked = false
+                }
+            }
+        }
+        viewModel.displayDualSimChanged(switcher.isChecked)
     }
 
     private fun onSaveClicked() {
@@ -131,7 +147,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         val appContext = applicationContext
         binding.botTokenEditview.setTextKeepState(settings.botToken)
         binding.chatIdEditview.setTextKeepState(settings.chatId)
-        binding.trustedPhoneNumberEditview.setTextKeepState(settings.trustedPhoneNumber)
+        binding.trustedPhoneEditText.setTextKeepState(settings.trustedPhoneNumber)
         binding.batteryMonitoringSwitch.isChecked = settings.isBatteryMonitoring
         binding.chargerStatusSwitch.isEnabled = settings.isChargerStatusEnabled
         binding.chargerStatusSwitch.isChecked = settings.isChargerStatusEnabled && settings.isChargerStatus
@@ -149,6 +165,9 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         binding.displayDualSimSwitch.isChecked = settings.isDisplayDualSim && isDualCards
     }
 
+    private fun showServicesStatus(status: String) {
+        binding.servicesStatusTextView.text = status
+    }
     private fun showSelectChatList(chatsList: List<TelegramChat>) {
         AlertDialog.Builder(binding.root.context)
             .setTitle(R.string.select_chat)
@@ -170,7 +189,7 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
 
     override fun onResume() {
         super.onResume()
-        updateServicesStatus()
+        viewModel.onResume()
         val backStatus = setPermissionBack
         setPermissionBack = false
         if (backStatus) {
@@ -188,16 +207,16 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         when (requestCode) {
             0 -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                    Log.d(TAG, "onRequestPermissionsResult: No camera permissions.")
+                if (isCameraPermissionGranted().not()) {
+                    logger.d(TAG, "onRequestPermissionsResult: No camera permissions.")
                     snackbar(R.string.no_camera_permission)
                     return
                 }
                 val intent = Intent(applicationContext, ScannerActivity::class.java)
-                startActivityForResult(intent, 1)
+                scannerLauncher.launch(intent)
             }
 
-            1 -> {
+            PHONE_STATE_PERMISSION_CODE -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     if (isReadPhoneStatePermissionGranted()) {
                         if (telephonyManager.phoneCount <= 1 || OtherUtils.getActiveCard(applicationContext) < 2) {
@@ -270,37 +289,8 @@ class MainActivity : AppCompatActivity(R.layout.activity_main) {
 
     private fun onWebViewError() = snackbar("Browser not found.")
 
-    private fun updateServicesStatus() {
-        val context = applicationContext
-        val text = """
-            BatteryService: ${context.isOwnServiceRunning(BatteryService::class.java)}
-            ChatCommandService: ${context.isOwnServiceRunning(ChatCommandService::class.java)}
-            NotificationListenerService: ${context.isOwnServiceRunning(NotificationListenerService::class.java)}
-            ResendService: ${context.isOwnServiceRunning(ResendService::class.java)}
-        """.trimIndent()
-        binding.servicesStatusTextView.text = text
-    }
-
     private fun snackbar(resId: Int) = Snackbar.make(binding.botTokenEditview, resId, Snackbar.LENGTH_LONG).show()
     private fun snackbar(text: String) = Snackbar.make(binding.botTokenEditview, text, Snackbar.LENGTH_LONG).show()
-
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (data == null) {
-            logger.e(TAG, "onActivityResult: data is null")
-            return
-        }
-        if (requestCode == COMMON_PERMISSIONS_CODE) {
-            if (resultCode == Consts.RESULT_CONFIG_JSON) {
-                val jsonConfig = JsonParser.parseString(data.getStringExtra("config_json"))?.asJsonObject
-                if (jsonConfig == null) {
-                    snackbar("Invalid config"/*R.string.invalid_config_by_qr_code*/)
-                    return
-                }
-                viewModel.qrCodeScanned(jsonConfig)
-            }
-        }
-    }
 
     companion object {
         private const val TAG = "MainActivity"

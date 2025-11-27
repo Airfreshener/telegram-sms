@@ -45,7 +45,7 @@ class SettingsViewModelDelegateImpl(
         settings.value = settings.value.copy(isPrivacyMode = checked)
     }
 
-    override fun trustedPhoneNumberChanged(value: String) {
+    override fun trustedPhoneChanged(value: String) {
         if (value == settings.value.trustedPhoneNumber) return
 
         settings.value = settings.value.copy(

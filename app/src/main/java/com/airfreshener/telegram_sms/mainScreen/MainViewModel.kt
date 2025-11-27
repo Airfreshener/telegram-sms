@@ -11,10 +11,13 @@ import com.airfreshener.telegram_sms.common.data.PrefsRepository
 import com.airfreshener.telegram_sms.common.data.StringsProvider
 import com.airfreshener.telegram_sms.migration.UpdateVersion1
 import com.airfreshener.telegram_sms.model.GetUpdatesDTO
-import com.airfreshener.telegram_sms.model.PollingJson
 import com.airfreshener.telegram_sms.model.RequestMessage
 import com.airfreshener.telegram_sms.model.Settings
 import com.airfreshener.telegram_sms.model.TelegramChat
+import com.airfreshener.telegram_sms.services.BatteryService
+import com.airfreshener.telegram_sms.services.NotificationListenerService
+import com.airfreshener.telegram_sms.services.ResendService
+import com.airfreshener.telegram_sms.services.chat.ChatCommandService
 import com.airfreshener.telegram_sms.utils.Consts
 import com.airfreshener.telegram_sms.utils.Logger
 import com.airfreshener.telegram_sms.utils.NetworkUtils
@@ -23,6 +26,7 @@ import com.airfreshener.telegram_sms.utils.PaperUtils.DEFAULT_BOOK
 import com.airfreshener.telegram_sms.utils.PaperUtils.SYSTEM_BOOK
 import com.airfreshener.telegram_sms.utils.PaperUtils.tryRead
 import com.airfreshener.telegram_sms.utils.ServiceUtils
+import com.airfreshener.telegram_sms.utils.ServiceUtils.isOwnServiceRunning
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
@@ -34,7 +38,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import okhttp3.Request
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import java.util.concurrent.TimeUnit
 
@@ -54,6 +57,7 @@ class MainViewModel(
     val showPrivacyDialog: MutableSharedFlow<Unit> = MutableSharedFlow()
     val showSnackBar: MutableSharedFlow<String> = MutableSharedFlow()
     val showSelectChatList: MutableSharedFlow<List<TelegramChat>> = MutableSharedFlow()
+    val servicesStatus: MutableStateFlow<String> = MutableStateFlow("")
 
     init {
         if (!prefsRepository.getPrivacyDialogAgree()) {
@@ -104,11 +108,29 @@ class MainViewModel(
         Thread { ServiceUtils.stopAllServices(appContext) }.start()
     }
 
+    fun onResume() {
+        updateServicesStatus()
+    }
+
+    fun onUpdateStatusClicked() {
+        updateServicesStatus()
+    }
+
     private suspend fun showSnackBar(str: String) {
         showSnackBar.emit(str)
     }
     private suspend fun showSnackBar(resId: Int) {
         showSnackBar.emit(stringsProvider.getString(resId))
+    }
+    private fun updateServicesStatus() {
+        val context = appContext
+        val text = """
+            BatteryService: ${context.isOwnServiceRunning(BatteryService::class.java)}
+            ChatCommandService: ${context.isOwnServiceRunning(ChatCommandService::class.java)}
+            NotificationListenerService: ${context.isOwnServiceRunning(NotificationListenerService::class.java)}
+            ResendService: ${context.isOwnServiceRunning(ResendService::class.java)}
+        """.trimIndent()
+        servicesStatus.value = text
     }
 
     fun onSaveClicked() {
@@ -204,11 +226,9 @@ class MainViewModel(
                     .build()
             val call = okhttpClient.newCall(request)
             val errorHead = "Get chat ID failed: "
-            logger.d(TAG, "body: " + requestBody)
             val result = runCatching { call.execute() }
             _loading.value = false
             val responseBodyStr = result.getOrNull()?.body?.string()
-            logger.d(TAG, "response: " + responseBodyStr)
             val responseJson = runCatching {
                 JsonParser.parseString(responseBodyStr).asJsonObject
             }.getOrNull()

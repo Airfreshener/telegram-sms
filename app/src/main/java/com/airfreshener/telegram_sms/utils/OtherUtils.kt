@@ -156,12 +156,6 @@ object OtherUtils {
         }
     }
 
-    fun Context.isReadPhoneStatePermissionGranted() =
-        ContextCompat.checkSelfPermission(this, READ_PHONE_STATE) == PERMISSION_GRANTED
-
-    fun Activity.requestReadPhoneStatePermission(requestCode: Int) =
-        ActivityCompat.requestPermissions(this, arrayOf(READ_PHONE_STATE), requestCode)
-
     fun getSimDisplayName(context: Context, slot: Int): String {
         val TAG = "get_sim_display_name"
         var result = "Unknown"

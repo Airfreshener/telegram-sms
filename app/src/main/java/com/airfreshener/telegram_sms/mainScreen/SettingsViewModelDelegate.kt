@@ -13,7 +13,7 @@ interface SettingsViewModelDelegate {
     fun displayDualSimChanged(checked: Boolean)
     fun verificationCodeChecked(checked: Boolean)
     fun privacyModeChanged(checked: Boolean)
-    fun trustedPhoneNumberChanged(value: String)
+    fun trustedPhoneChanged(value: String)
     fun chatIdChanged(value: String)
     fun botTokenChanged(value: String)
 }
