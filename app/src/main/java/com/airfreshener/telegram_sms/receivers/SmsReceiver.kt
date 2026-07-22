@@ -15,7 +15,7 @@ import androidx.core.content.ContextCompat
 import com.airfreshener.telegram_sms.R
 import com.airfreshener.telegram_sms.utils.ContextUtils.app
 import com.airfreshener.telegram_sms.utils.OtherUtils
-import com.airfreshener.telegram_sms.utils.OtherUtils.isReadPhoneStatePermissionGranted
+import com.airfreshener.telegram_sms.utils.isReadPhoneStatePermissionGranted
 import com.airfreshener.telegram_sms.utils.PaperUtils.DEFAULT_BOOK
 import com.airfreshener.telegram_sms.utils.PaperUtils.SYSTEM_BOOK
 import com.airfreshener.telegram_sms.utils.PaperUtils.tryRead
