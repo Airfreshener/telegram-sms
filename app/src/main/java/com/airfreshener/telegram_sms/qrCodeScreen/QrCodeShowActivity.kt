@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.widget.ImageView
 import androidx.appcompat.app.AppCompatActivity
 import com.airfreshener.telegram_sms.R
+import com.airfreshener.telegram_sms.model.ConfigurationQrCodeDTO
 import com.airfreshener.telegram_sms.utils.ContextUtils.app
 import com.github.sumimakito.awesomeqrcode.AwesomeQrRenderer
 import com.google.gson.Gson
@@ -17,7 +18,7 @@ class QrCodeShowActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_qrcode)
         val settings = prefsRepository.getSettings()
-        val config = ConfigList(
+        val config = ConfigurationQrCodeDTO(
             bot_token = settings.botToken,
             chat_id = settings.chatId,
             trusted_phone_number = settings.trustedPhoneNumber,
@@ -37,17 +38,4 @@ class QrCodeShowActivity : AppCompatActivity() {
             )
         )
     }
-
-    @Suppress("unused", "PropertyName")
-    private class ConfigList(
-        val bot_token: String?,
-        val chat_id: String?,
-        val trusted_phone_number: String?,
-        val fallback_sms: Boolean,
-        val chat_command: Boolean,
-        val battery_monitoring_switch: Boolean,
-        val charger_status: Boolean,
-        val verification_code: Boolean,
-        val privacy_mode: Boolean,
-    )
 }

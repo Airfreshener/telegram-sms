@@ -3,108 +3,84 @@ package com.airfreshener.telegram_sms.mainScreen
 import android.content.Context
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.airfreshener.telegram_sms.R
 import com.airfreshener.telegram_sms.common.data.LogRepository
 import com.airfreshener.telegram_sms.common.data.PrefsRepository
+import com.airfreshener.telegram_sms.common.data.StringsProvider
 import com.airfreshener.telegram_sms.migration.UpdateVersion1
+import com.airfreshener.telegram_sms.model.GetUpdatesDTO
+import com.airfreshener.telegram_sms.model.RequestMessage
 import com.airfreshener.telegram_sms.model.Settings
+import com.airfreshener.telegram_sms.model.TelegramChat
+import com.airfreshener.telegram_sms.services.BatteryService
+import com.airfreshener.telegram_sms.services.NotificationListenerService
+import com.airfreshener.telegram_sms.services.ResendService
+import com.airfreshener.telegram_sms.services.chat.ChatCommandService
 import com.airfreshener.telegram_sms.utils.Consts
-import com.airfreshener.telegram_sms.utils.PaperUtils
+import com.airfreshener.telegram_sms.utils.Logger
+import com.airfreshener.telegram_sms.utils.NetworkUtils
+import com.airfreshener.telegram_sms.utils.OkHttpUtils.toRequestBody
+import com.airfreshener.telegram_sms.utils.PaperUtils.DEFAULT_BOOK
+import com.airfreshener.telegram_sms.utils.PaperUtils.SYSTEM_BOOK
 import com.airfreshener.telegram_sms.utils.PaperUtils.tryRead
 import com.airfreshener.telegram_sms.utils.ServiceUtils
+import com.airfreshener.telegram_sms.utils.ServiceUtils.isOwnServiceRunning
+import com.google.gson.JsonArray
 import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import okhttp3.Request
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import java.util.concurrent.TimeUnit
 
 class MainViewModel(
+    private val stringsProvider: StringsProvider,
     private val appContext: Context,
     private val prefsRepository: PrefsRepository,
+    private val settingsViewModelDelegate: SettingsViewModelDelegate,
     private val logRepository: LogRepository,
-) : ViewModel() {
+    private val logger: Logger,
+) : ViewModel(), SettingsViewModelDelegate by settingsViewModelDelegate {
 
-    private val _settings: MutableStateFlow<Settings> = MutableStateFlow(prefsRepository.getSettings())
-    val settings: StateFlow<Settings> = _settings.asStateFlow()
+    val settings: StateFlow<Settings> = settingsViewModelDelegate.settingsFlow
 
     private val _loading: MutableStateFlow<Boolean> = MutableStateFlow(false)
     val isLoading: Flow<Boolean> = _loading.asStateFlow()
-    val showPrivacyDialog: MutableSharedFlow<Unit> = MutableStateFlow(Unit)
+    val showPrivacyDialog: MutableSharedFlow<Unit> = MutableSharedFlow()
+    val showSnackBar: MutableSharedFlow<String> = MutableSharedFlow()
+    val showSelectChatList: MutableSharedFlow<List<TelegramChat>> = MutableSharedFlow()
+    val servicesStatus: MutableStateFlow<String> = MutableStateFlow("")
 
     init {
-        if (!prefsRepository.getPrivacyDialogAgree()) viewModelScope.launch { showPrivacyDialog.emit(Unit) }
+        if (!prefsRepository.getPrivacyDialogAgree()) {
+            viewModelScope.launch { showPrivacyDialog.emit(Unit) }
+        }
         val settings = prefsRepository.getSettings()
         if (prefsRepository.getInitialized()) {
             updateConfig()
-            checkVersionUpgrade(logRepository, appContext, true)
+            checkVersionUpgrade(resetLog = true)
             ServiceUtils.startServices(appContext, settings)
         }
     }
 
     fun batteryMonitoringChecked(checked: Boolean) {
-        _settings.value = _settings.value.copy(
+        val newSettings = settings.value.copy(
             isBatteryMonitoring = checked,
-            isChargerStatus = checked && _settings.value.isChargerStatus
+            isChargerStatus = checked && settings.value.isChargerStatus
         )
+        settingsViewModelDelegate.updateSettings(newSettings)
     }
 
     fun dnsOverHttpChecked(checked: Boolean) {
-        _settings.value = _settings.value.copy(isDnsOverHttp = checked)
-    }
-
-    fun fallbackSmsChanged(checked: Boolean) {
-        _settings.value = _settings.value.copy(isFallbackSms = checked)
-    }
-
-    fun chargerStatusChanged(checked: Boolean) {
-        _settings.value = _settings.value.copy(isChargerStatus = checked)
-    }
-
-    fun chatCommandChanged(checked: Boolean) {
-        _settings.value = _settings.value.copy(
-            isChatCommand = checked,
-            isPrivacyMode = _settings.value.chatId.isNotEmpty() && checked && _settings.value.isPrivacyMode,
-        )
-    }
-
-    fun displayDualSimChanged(checked: Boolean) {
-        _settings.value = _settings.value.copy(isDisplayDualSim = checked)
-    }
-
-    fun verificationCodeChecked(checked: Boolean) {
-        _settings.value = _settings.value.copy(isVerificationCode = checked)
-    }
-
-    fun privacyModeChanged(checked: Boolean) {
-        _settings.value = _settings.value.copy(isPrivacyMode = checked)
-    }
-
-    fun trustedPhoneNumberChanged(value: String) {
-        if (value == _settings.value.trustedPhoneNumber) return
-
-        _settings.value = _settings.value.copy(
-            trustedPhoneNumber = value,
-            isFallbackSms = value.isNotEmpty() && _settings.value.isFallbackSms,
-        )
-    }
-
-    fun chatIdChanged(value: String) {
-        if (value == _settings.value.chatId) return
-        _settings.value = _settings.value.copy(
-            chatId = value,
-            isPrivacyMode = value.isNotEmpty() && _settings.value.isChatCommand && _settings.value.isPrivacyMode,
-        )
-    }
-
-    fun botTokenChanged(value: String) {
-        if (value == _settings.value.botToken) return
-        _settings.value = _settings.value.copy(
-            botToken = value,
-        )
+        settingsViewModelDelegate.updateSettings(settings.value.copy(isDnsOverHttp = checked))
     }
 
     fun qrCodeScanned(jsonConfig: JsonObject) {
@@ -124,12 +100,197 @@ class MainViewModel(
             isDnsOverHttp = true, // TODO
             isDisplayDualSim = false // TODO
         )
-        _settings.value = newSettings
+        settingsViewModelDelegate.updateSettings(newSettings)
     }
 
+    fun onStopClicked() {
+        val appContext = appContext
+        Thread { ServiceUtils.stopAllServices(appContext) }.start()
+    }
 
-    private fun checkVersionUpgrade(logRepository: LogRepository, context: Context, resetLog: Boolean) {
-        val versionCode = PaperUtils.SYSTEM_BOOK.tryRead("version_code", 0)
+    fun onResume() {
+        updateServicesStatus()
+    }
+
+    fun onUpdateStatusClicked() {
+        updateServicesStatus()
+    }
+
+    private suspend fun showSnackBar(str: String) {
+        showSnackBar.emit(str)
+    }
+    private suspend fun showSnackBar(resId: Int) {
+        showSnackBar.emit(stringsProvider.getString(resId))
+    }
+    private fun updateServicesStatus() {
+        val context = appContext
+        val text = """
+            BatteryService: ${context.isOwnServiceRunning(BatteryService::class.java)}
+            ChatCommandService: ${context.isOwnServiceRunning(ChatCommandService::class.java)}
+            NotificationListenerService: ${context.isOwnServiceRunning(NotificationListenerService::class.java)}
+            ResendService: ${context.isOwnServiceRunning(ResendService::class.java)}
+        """.trimIndent()
+        servicesStatus.value = text
+    }
+
+    fun onSaveClicked() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val appContext = appContext
+            val botTokenSaved = prefsRepository.getSettings().botToken
+            val newSettings = settings.value
+            if (newSettings.botToken.isEmpty() || newSettings.chatId.isEmpty()) {
+                showSnackBar(R.string.chat_id_or_token_not_config)
+                return@launch
+            }
+            if (newSettings.isFallbackSms && newSettings.trustedPhoneNumber.isEmpty()) {
+                showSnackBar(R.string.trusted_phone_number_empty)
+                return@launch
+            }
+            if (!prefsRepository.getPrivacyDialogAgree()) {
+                showPrivacyDialog.emit(Unit)
+                return@launch
+            }
+            _loading.value = true
+            val requestUri = NetworkUtils.getUrl(newSettings.botToken, "sendMessage")
+            val requestBody = RequestMessage().apply {
+                chat_id = newSettings.chatId
+                text = appContext.getString(R.string.success_connect)
+            }
+            val body = requestBody.toRequestBody()
+            val okhttpClient = NetworkUtils.getOkhttpObj(newSettings)
+            val request: Request = Request.Builder().url(requestUri).post(body).build()
+            val call = okhttpClient.newCall(request)
+            val errorHead = "Send message failed: "
+            val result = runCatching { call.execute() }
+            val responseBodyStr = result.getOrNull()?.body?.string()
+            val responseJson = runCatching {
+                JsonParser.parseString(responseBodyStr).asJsonObject
+            }.getOrNull()
+
+            _loading.value = false
+            if (result.isSuccess && result.getOrNull()?.code == 200) {
+                if (newSettings.botToken != botTokenSaved) {
+                    logger.i(
+                        TAG, "onResponse: The current bot token does not match the " +
+                                "saved bot token, clearing the message database."
+                    )
+                    DEFAULT_BOOK.destroy()
+                }
+                SYSTEM_BOOK.write("version", Consts.SYSTEM_CONFIG_VERSION)
+                checkVersionUpgrade( resetLog = false)
+
+                prefsRepository.setSettings(newSettings)
+
+                viewModelScope.launch(Dispatchers.Default) {
+                    ServiceUtils.stopAllServices(appContext)
+                    try {
+                        delay(1000)
+                    } catch (e: InterruptedException) {
+                        e.printStackTrace()
+                    }
+                    ServiceUtils.startServices(appContext, newSettings)
+                }
+                showSnackBar(R.string.success)
+            } else {
+                val exception = result.exceptionOrNull()
+                val errorMessage = errorHead + (responseJson?.get("description") ?: exception?.message)
+                logger.e(TAG, errorMessage, exception)
+                showSnackBar(errorMessage)
+            }
+        }
+    }
+
+    fun onGetIdClicked() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val settings = settings.value
+            if (settings.botToken.isEmpty()) {
+                showSnackBar(R.string.token_not_configure)
+                return@launch
+            }
+            _loading.value = true
+
+            Thread { ServiceUtils.stopAllServices(appContext) }.start()
+
+            val requestUri = NetworkUtils.getUrl(settings.botToken, "getUpdates")
+            val okhttpClient = NetworkUtils.getOkhttpObj(settings)
+                .newBuilder()
+                .readTimeout(60, TimeUnit.SECONDS)
+                .build()
+            val requestBody = GetUpdatesDTO()
+            requestBody.timeout = 10
+            val body = requestBody.toRequestBody()
+            val request: Request =
+                Request.Builder()
+                    .url(requestUri)
+                    .method("POST", body)
+                    .build()
+            val call = okhttpClient.newCall(request)
+            val errorHead = "Get chat ID failed: "
+            val result = runCatching { call.execute() }
+            _loading.value = false
+            val responseBodyStr = result.getOrNull()?.body?.string()
+            val responseJson = runCatching {
+                JsonParser.parseString(responseBodyStr).asJsonObject
+            }.getOrNull()
+            if (result.isSuccess && result.getOrNull()?.code == 200) {
+                val chatsJsonArray = responseJson?.getAsJsonArray("result")
+                if (chatsJsonArray == null || chatsJsonArray.size() == 0) {
+                    showSnackBar(R.string.unable_get_recent)
+                    return@launch
+                }
+                val chatsList = parseChats(chatsJsonArray)
+                showSelectChatList.emit(chatsList)
+            } else {
+                val exception = result.exceptionOrNull()
+                val errorMessage = errorHead + (responseJson?.get("description") ?: exception?.message)
+                logger.e(TAG, errorMessage, exception)
+                showSnackBar(errorMessage)
+            }
+        }
+    }
+
+    fun onChatSelected(chat: TelegramChat) {
+        settingsViewModelDelegate.updateSettings(settings.value.copy(chatId = chat.id))
+    }
+
+    private fun parseChats(chatsJsonArray: JsonArray): List<TelegramChat> {
+        val chatsList = ArrayList<TelegramChat>()
+        val chatIdsSet = HashSet<String>()
+        for (item in chatsJsonArray) {
+            val itemObj = item.asJsonObject
+            if (itemObj.has("message")) {
+                val messageObj = itemObj["message"].asJsonObject
+                val chatObj = messageObj["chat"].asJsonObject
+                if (!chatIdsSet.contains(chatObj["id"].asString)) {
+                    var username = ""
+                    chatObj["username"]?.asString?.let { username = it }
+                    chatObj["title"]?.asString?.let { username = it }
+                    if (username == "" && !chatObj.has("username")) {
+                        chatObj["first_name"]?.asString?.let { username = it }
+                        chatObj["last_name"]?.asString?.let { username += " $it" }
+                    }
+                    val title = username + " (" + chatObj["type"].asString + ")"
+                    val id = chatObj["id"].asString
+                    chatsList += TelegramChat(id = id, title = title)
+                    chatIdsSet += id
+                }
+            }
+            if (itemObj.has("channel_post")) {
+                val messageObj = itemObj["channel_post"].asJsonObject
+                val chatObj = messageObj["chat"].asJsonObject
+                if (!chatIdsSet.contains(chatObj["id"].asString)) {
+                    val title = chatObj["title"].asString + " (Channel)"
+                    val id = chatObj["id"].asString
+                    chatsList += TelegramChat(id = id, title = title)
+                    chatIdsSet += id
+                }
+            }
+        }
+        return chatsList
+    }
+    private fun checkVersionUpgrade(resetLog: Boolean) {
+        val context = appContext
+        val versionCode = SYSTEM_BOOK.tryRead("version_code", 0)
         val packageManager = context.packageManager
         val packageInfo: PackageInfo
         val currentVersionCode: Int
@@ -144,19 +305,19 @@ class MainViewModel(
             if (resetLog) {
                 logRepository.resetLogFile()
             }
-            PaperUtils.SYSTEM_BOOK.write("version_code", currentVersionCode)
+            SYSTEM_BOOK.write("version_code", currentVersionCode)
         }
     }
 
     private fun updateConfig() {
-        val storeVersion = PaperUtils.SYSTEM_BOOK.tryRead("version", 0)
+        val storeVersion = SYSTEM_BOOK.tryRead("version", 0)
         if (storeVersion == Consts.SYSTEM_CONFIG_VERSION) {
             UpdateVersion1().checkError()
             return
         }
         when (storeVersion) {
             0 -> UpdateVersion1().update()
-            else -> Log.i(TAG, "update_config: Can't find a version that can be updated")
+            else -> logger.i(TAG, "update_config: Can't find a version that can be updated")
         }
     }
 
